@@ -1,0 +1,107 @@
+name: bench
+on:
+  push: { branches: [main] }
+  workflow_dispatch:
+    inputs:
+      profile: { description: 'Run the callgrind profile job instead of the bench', type: boolean, default: false }
+      pgo: { description: 'Run the PGO + BOLT job instead of the bench', type: boolean, default: false }
+      tiers: { description: 'Also time Rust with ZSTD_SIMD=scalar (safe Huffman loops, scalar interleave, plain sequence loop)', type: boolean, default: false }
+permissions:
+  contents: read
+# A new run waits for the one before it; it does not cancel it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  # Not a required check. The Go and Rust decodes of the tiles run in one container, so the
+  # ratio compares the same machine.
+  bench:
+    if: ${{ !inputs.profile && !inputs.pgo }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { lfs: false }
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: .github/ci/Dockerfile
+          target: bench
+          load: true
+          push: false
+          tags: zstd-bench:local
+          cache-from: type=gha,scope=zstd-rs-bench
+          cache-to: type=gha,mode=max,scope=zstd-rs-bench
+      # docker run, not a RUN layer: a BuildKit cache hit would skip the timing. bash, for
+      # pipefail: a failing bench.sh fails the step, not only tee.
+      - shell: bash
+        run: |
+          { echo '### Decode time of the tiles, ms per MB of output (lower is better)'; echo
+            echo "CPU: $(docker run --rm zstd-bench:local sh -c "grep -m1 'model name' /proc/cpuinfo | cut -d: -f2")"; echo
+            docker run --rm zstd-bench:local sh tests/parity/bench.sh
+            echo; echo '### v4 builds: Go GOAMD64=v4, Rust -C target-cpu=x86-64-v4'; echo
+            # Hosted x86 runners may lack AVX-512: a v4 binary would stop with SIGILL, so the v4
+            # names then point at the default builds.
+            docker run --rm -e ORACLE=oracle-v4 -e BENCH=bench-v4 -e BENCH_ST=0 zstd-bench:local sh -c '
+              if ! grep -q avx512f /proc/cpuinfo; then
+                echo "no avx512f on this runner: the v4 columns use the default builds" >&2
+                mkdir /tmp/v4 && ln -s "$(command -v oracle)" /tmp/v4/oracle-v4 && ln -s "$(command -v bench)" /tmp/v4/bench-v4
+                PATH=/tmp/v4:$PATH
+              fi
+              exec sh tests/parity/bench.sh'
+            if [ "${{ inputs.tiers }}" = true ]; then
+              echo; echo '### Rust with ZSTD_SIMD=scalar'; echo
+              docker run --rm -e ZSTD_SIMD=scalar -e BENCH_ST=0 zstd-bench:local sh tests/parity/bench.sh
+            fi; } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # Instruction counts (callgrind) of Rust and Go on the same tiles, for perf work.
+  profile:
+    if: ${{ inputs.profile }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { lfs: false }
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: .github/ci/Dockerfile
+          target: profile
+          load: true
+          push: false
+          tags: zstd-profile:local
+          cache-from: type=gha,scope=zstd-rs-bench
+      - shell: bash
+        run: |
+          mkdir -p prof
+          docker run --rm -v "$PWD/prof:/prof" zstd-profile:local sh tests/parity/profile.sh /prof | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with: { name: profile, path: 'prof/*.t*', if-no-files-found: warn }
+
+  # The gain of PGO and of PGO + BOLT (cargo-pgo, profile: the tiles) on the bench example, each
+  # against the same Go oracle (default builds, default threads).
+  pgo:
+    if: ${{ inputs.pgo }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { lfs: false }
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: .github/ci/Dockerfile
+          target: pgo
+          load: true
+          push: false
+          tags: zstd-pgo:local
+          cache-from: type=gha,scope=zstd-rs-bench
+      - shell: bash
+        run: |
+          for b in bench bench-pgo bench-pgo-bolt; do
+            echo "### Rust $b against Go, ms per MB of output"; echo
+            docker run --rm -e BENCH=$b -e BENCH_ST=0 zstd-pgo:local sh tests/parity/bench.sh; echo
+          done | tee -a "$GITHUB_STEP_SUMMARY"

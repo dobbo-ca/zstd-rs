@@ -1,0 +1,18 @@
+[package]
+name = "zstd"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "Apache-2.0"
+description = "Zstandard (RFC 8878) decoder tuned for WSI tiles, with a decoder for CZI zstd0/zstd1 subblocks. Rust port of github.com/dobbo-ca/zstd-go."
+publish = false
+
+[dependencies]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
+
+# One thread, no libtest: the allocator test needs to know that every allocation is the test's own.
+[[test]]
+name = "resources"
+harness = false

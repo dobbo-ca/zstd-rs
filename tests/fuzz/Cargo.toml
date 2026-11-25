@@ -1,0 +1,71 @@
+[package]
+name = "zstd-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+zstd = { path = "../.." }
+
+# Not part of the root package: only this crate may depend on libfuzzer-sys.
+[workspace]
+
+[[bin]]
+name = "decode"
+path = "fuzz_targets/decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "limits"
+path = "fuzz_targets/limits.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "content_size"
+path = "fuzz_targets/content_size.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "czi"
+path = "fuzz_targets/czi.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "interleave"
+path = "fuzz_targets/interleave.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "seqloop"
+path = "fuzz_targets/seqloop.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "huf"
+path = "fuzz_targets/huf.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "frames"
+path = "fuzz_targets/frames.rs"
+test = false
+doc = false
+bench = false
